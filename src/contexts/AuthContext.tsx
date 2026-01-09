@@ -150,23 +150,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   useEffect(() => {
     if (initCompleteRef.current) return;
     initCompleteRef.current = true;
-
+  
     let isMounted = true;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let didTimeout = false;
-
+  
     const finishLoading = () => {
       if (!isMounted) return;
       setLoading(false);
     };
-
-    // 1) Listener: captura INITIAL_SESSION e mudanças futuras
+  
     const { data: listener } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
       if (!isMounted) return;
-
+  
       setSession(newSession);
       setUser(newSession?.user ?? null);
-
+  
       try {
         if (newSession?.user) {
           await fetchProfile(newSession.user.id, newSession.user.email);
@@ -175,31 +174,28 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
       } catch (e) {
         console.error('fetchProfile error:', e);
+        // se der erro no profile, ainda assim libera UI
+        setProfile(null);
       } finally {
-        // Se a sessão veio por evento, já libera a UI
         if (!didTimeout) finishLoading();
       }
     });
-
-    // 2) Timeout de segurança
-    const t0 = performance.now();
+  
+    // Timeout de segurança
     timeoutId = setTimeout(() => {
       didTimeout = true;
       console.warn('Auth timeout: Supabase não respondeu a tempo. Continuando sem autenticação.');
       finishLoading();
     }, AUTH_TIMEOUT_MS);
-
-    // 3) Carrega sessão inicial
+  
+    // Carrega sessão inicial
     supabase.auth
       .getSession()
       .then(async ({ data, error }) => {
-        const ms = Math.round(performance.now() - t0);
-        console.log('getSession ms:', ms);
-
         if (!isMounted) return;
-
+  
         if (didTimeout) {
-          // UI já liberou, mas se vier sessão válida depois, aproveita
+          // UI já liberou; mas se veio sessão depois, ainda atualiza estado
           if (!error && data?.session?.user) {
             setSession(data.session);
             setUser(data.session.user);
@@ -211,44 +207,51 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           }
           return;
         }
-
+  
         if (timeoutId) clearTimeout(timeoutId);
-
+  
         if (error) {
           console.error('Erro ao obter sessão:', error);
+          setSession(null);
+          setUser(null);
+          setProfile(null);
           finishLoading();
           return;
         }
-
+  
         const initialSession = data?.session ?? null;
         setSession(initialSession);
         setUser(initialSession?.user ?? null);
-
-        if (initialSession?.user) {
-          try {
+  
+        try {
+          if (initialSession?.user) {
             await fetchProfile(initialSession.user.id, initialSession.user.email);
-          } catch (e) {
-            console.error('fetchProfile failed:', e);
+          } else {
+            setProfile(null);
           }
-        } else {
+        } catch (e) {
+          console.error('fetchProfile failed:', e);
           setProfile(null);
+        } finally {
+          finishLoading();
         }
-
-        finishLoading();
       })
       .catch((e) => {
         console.error('Erro na autenticação:', e);
         if (!didTimeout && timeoutId) clearTimeout(timeoutId);
+        setSession(null);
+        setUser(null);
+        setProfile(null);
         finishLoading();
       });
-
+  
     return () => {
       isMounted = false;
       if (timeoutId) clearTimeout(timeoutId);
       listener.subscription.unsubscribe();
     };
   }, []);
-
+  
   /* ────────────────────────────────────────────── */
   /* Actions                                        */
   /* ────────────────────────────────────────────── */

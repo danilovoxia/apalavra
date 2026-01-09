@@ -5,8 +5,6 @@ import {
   Heart,
   BookOpen,
   RefreshCw,
-  Ban,
-  Palette,
   Crown,
   Shield,
   Zap,
@@ -39,23 +37,13 @@ function getErrMessage(e: unknown) {
   }
 }
 
-async function goToMpCheckout(plan: PaidPlan, cycle: BillingCycle) {
-  console.log('CLICK ->', plan, cycle);
-
-  const { checkout_url } = await createMpPreference(plan, cycle);
-
-  console.log('MP URL ->', checkout_url);
-  if (!checkout_url) throw new Error('checkout_url vazio');
-
-  window.location.href = checkout_url;
-}
-
 const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({ currentPlan, onUpgrade }) => {
-  const { isTrial, trialDaysRemaining, hasUsedTrial, startTrial } = useAuth();
+  // ✅ Pega também session + loading do Auth
+  const { isTrial, trialDaysRemaining, hasUsedTrial, startTrial, session, loading: authLoading } = useAuth();
+
   const [isStartingTrial, setIsStartingTrial] = useState(false);
   const [loading, setLoading] = useState<null | string>(null);
 
-  // ✅ Agora “pago” = qualquer plano que não seja free/trial
   const isPaid = ['essencial', 'caminhada', 'semeador'].includes(currentPlan);
 
   const handleStartTrial = async () => {
@@ -67,6 +55,41 @@ const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({ currentPlan, onUp
 
     if (result.success) {
       onUpgrade('trial');
+    }
+  };
+
+  // ✅ Checkout agora é interno e “à prova de sincronização”
+  const goToMpCheckout = async (plan: PaidPlan, cycle: BillingCycle, loadingKey: string) => {
+    // 1) Ainda sincronizando auth → não tenta pagar
+    if (authLoading) {
+      alert('Aguarde a sincronização da conta e tente novamente.');
+      return;
+    }
+
+    // 2) Sem sessão → não paga (e não fica “Abrindo…”)
+    if (!session) {
+      alert('Você precisa estar logado para assinar um plano.');
+      return;
+    }
+
+    try {
+      setLoading(loadingKey);
+
+      console.log('[CHECKOUT] click', { plan, cycle });
+
+      const { checkout_url } = await createMpPreference(plan, cycle);
+
+      console.log('[CHECKOUT] checkout_url', checkout_url);
+
+      if (!checkout_url) throw new Error('checkout_url vazio');
+
+      // ✅ evita popup-blocker
+      window.location.href = checkout_url;
+    } catch (e) {
+      console.error(e);
+      alert(`Não foi possível iniciar o pagamento.\n\n${getErrMessage(e)}`);
+    } finally {
+      setLoading(null);
     }
   };
 
@@ -160,7 +183,6 @@ const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({ currentPlan, onUp
         </div>
       )}
 
-      {/* ✅ Grid responsivo + largura segura */}
       <div className="w-full max-w-6xl mx-auto px-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
           {/* Free */}
@@ -226,18 +248,7 @@ const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({ currentPlan, onUp
             <div className="grid grid-cols-2 gap-3">
               <button
                 disabled={!!loading || isPaid}
-                onClick={async () => {
-                  try {
-                    setLoading("essencial-month");
-                    await goToMpCheckout('essencial', 'month');
-                  } catch (e) {
-                    console.error(e);
-                    alert(`Não foi possível iniciar o pagamento.\n\n${getErrMessage(e)}`);
-                  } finally {
-                    setLoading(null);
-                  }
-                }}
-                
+                onClick={() => goToMpCheckout('essencial', 'month', 'essencial-month')}
                 className={`py-3 rounded-xl font-bold transition-all ${
                   isPaid ? 'bg-cyan-50 text-cyan-400 cursor-not-allowed' : 'bg-cyan-500 text-white hover:bg-cyan-600'
                 }`}
@@ -247,17 +258,7 @@ const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({ currentPlan, onUp
 
               <button
                 disabled={!!loading || isPaid}
-                onClick={async () => {
-                  try {
-                    setLoading('essencial-year');
-                    await goToMpCheckout('essencial', 'year');
-                  } catch (e) {
-                    console.error(e);
-                    alert(`Não foi possível iniciar o pagamento.\n\n${getErrMessage(e)}`);
-                  } finally {
-                    setLoading(null);
-                  }
-                }}
+                onClick={() => goToMpCheckout('essencial', 'year', 'essencial-year')}
                 className={`py-3 rounded-xl font-bold transition-all ${
                   isPaid ? 'bg-cyan-50 text-cyan-400 cursor-not-allowed' : 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200'
                 }`}
@@ -293,17 +294,7 @@ const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({ currentPlan, onUp
             <div className="grid grid-cols-2 gap-3">
               <button
                 disabled={!!loading || isPaid}
-                onClick={async () => {
-                  try {
-                    setLoading('caminhada-month');
-                    await goToMpCheckout('caminhada', 'month');
-                  } catch (e) {
-                    console.error(e);
-                    alert(`Não foi possível iniciar o pagamento.\n\n${getErrMessage(e)}`);
-                  } finally {
-                    setLoading(null);
-                  }
-                }}
+                onClick={() => goToMpCheckout('caminhada', 'month', 'caminhada-month')}
                 className={`py-3 rounded-xl font-bold transition-all ${
                   isPaid ? 'bg-purple-50 text-purple-300 cursor-not-allowed' : 'bg-purple-500 text-white hover:bg-purple-600'
                 }`}
@@ -313,17 +304,7 @@ const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({ currentPlan, onUp
 
               <button
                 disabled={!!loading || isPaid}
-                onClick={async () => {
-                  try {
-                    setLoading('caminhada-year');
-                    await goToMpCheckout('caminhada', 'year');
-                  } catch (e) {
-                    console.error(e);
-                    alert(`Não foi possível iniciar o pagamento.\n\n${getErrMessage(e)}`);
-                  } finally {
-                    setLoading(null);
-                  }
-                }}
+                onClick={() => goToMpCheckout('caminhada', 'year', 'caminhada-year')}
                 className={`py-3 rounded-xl font-bold transition-all ${
                   isPaid ? 'bg-purple-50 text-purple-300 cursor-not-allowed' : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
                 }`}
@@ -359,17 +340,7 @@ const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({ currentPlan, onUp
             <div className="grid grid-cols-2 gap-3">
               <button
                 disabled={!!loading || isPaid}
-                onClick={async () => {
-                  try {
-                    setLoading('semeador-month');
-                    await goToMpCheckout('semeador', 'month');
-                  } catch (e) {
-                    console.error(e);
-                    alert(`Não foi possível iniciar o pagamento.\n\n${getErrMessage(e)}`);
-                  } finally {
-                    setLoading(null);
-                  }
-                }}
+                onClick={() => goToMpCheckout('semeador', 'month', 'semeador-month')}
                 className={`py-3 rounded-xl font-bold transition-all ${
                   isPaid ? 'bg-white/20 cursor-not-allowed' : 'bg-white text-indigo-600 hover:bg-white/90'
                 }`}
@@ -379,17 +350,7 @@ const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({ currentPlan, onUp
 
               <button
                 disabled={!!loading || isPaid}
-                onClick={async () => {
-                  try {
-                    setLoading('semeador-year');
-                    await goToMpCheckout('semeador', 'year');
-                  } catch (e) {
-                    console.error(e);
-                    alert(`Não foi possível iniciar o pagamento.\n\n${getErrMessage(e)}`);
-                  } finally {
-                    setLoading(null);
-                  }
-                }}
+                onClick={() => goToMpCheckout('semeador', 'year', 'semeador-year')}
                 className={`py-3 rounded-xl font-bold transition-all ${
                   isPaid ? 'bg-white/20 cursor-not-allowed' : 'bg-white/20 hover:bg-white/30'
                 }`}
