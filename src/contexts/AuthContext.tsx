@@ -10,7 +10,7 @@ import React, {
 import { supabase } from '@/lib/supabase';
 import { User, Session } from '@supabase/supabase-js';
 import { toast } from 'sonner';
-import { TRIAL_CONFIG, getTrialExpiryDate } from '@/lib/stripe';
+import { getTrialExpiryDate } from '@/lib/stripe';
 
 interface UserProfile {
   id: string;
@@ -52,8 +52,8 @@ export const useAuth = () => {
   return ctx;
 };
 
-// Timeout para evitar que o app trave se o Supabase não responder
-const AUTH_TIMEOUT_MS = 8000;
+// Timeout para evitar travar se o Supabase estiver lento
+const AUTH_TIMEOUT_MS = 20000;
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -78,28 +78,19 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const localTrial = localStorage.getItem('isTrial');
     const expiry = localStorage.getItem('trialExpiry');
 
-    if (localTrial === 'true' && expiry && new Date(expiry) > new Date()) {
-      return true;
-    }
-
-    return false;
+    return localTrial === 'true' && !!expiry && new Date(expiry) > new Date();
   }, [profile]);
 
   const trialDaysRemaining = useMemo(() => {
-    const expiry =
-      profile?.trial_expires_at || localStorage.getItem('trialExpiry');
+    const expiry = profile?.trial_expires_at || localStorage.getItem('trialExpiry');
     if (!expiry) return null;
 
-    const diff =
-      new Date(expiry).getTime() - new Date().getTime();
-
-    return diff > 0
-      ? Math.ceil(diff / (1000 * 60 * 60 * 24))
-      : null;
+    const diff = new Date(expiry).getTime() - new Date().getTime();
+    return diff > 0 ? Math.ceil(diff / (1000 * 60 * 60 * 24)) : null;
   }, [profile]);
 
   const isPremium = useMemo(() => {
-    // 🔴 Trial NÃO é Premium
+    // Trial NÃO é Premium
     if (isTrial) return false;
 
     if (profile?.is_premium) {
@@ -120,7 +111,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [profile, isTrial]);
 
   /* ────────────────────────────────────────────── */
-  /* Profile                                       */
+  /* Profile                                        */
   /* ────────────────────────────────────────────── */
 
   const fetchProfile = async (userId: string, email?: string) => {
@@ -157,43 +148,71 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   /* ────────────────────────────────────────────── */
 
   useEffect(() => {
-    // Previne múltiplas inicializações
     if (initCompleteRef.current) return;
     initCompleteRef.current = true;
 
-    let timeoutId: NodeJS.Timeout;
-    let isTimedOut = false;
+    let isMounted = true;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let didTimeout = false;
 
-    // Função para finalizar o loading
     const finishLoading = () => {
-      if (!isTimedOut) {
-        setLoading(false);
-      }
+      if (!isMounted) return;
+      setLoading(false);
     };
 
-    // Timeout de segurança - se Supabase não responder, continua sem auth
+    // 1) Listener: captura INITIAL_SESSION e mudanças futuras
+    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+      if (!isMounted) return;
+
+      setSession(newSession);
+      setUser(newSession?.user ?? null);
+
+      try {
+        if (newSession?.user) {
+          await fetchProfile(newSession.user.id, newSession.user.email);
+        } else {
+          setProfile(null);
+        }
+      } catch (e) {
+        console.error('fetchProfile error:', e);
+      } finally {
+        // Se a sessão veio por evento, já libera a UI
+        if (!didTimeout) finishLoading();
+      }
+    });
+
+    // 2) Timeout de segurança
+    const t0 = performance.now();
     timeoutId = setTimeout(() => {
-      isTimedOut = true;
+      didTimeout = true;
       console.warn('Auth timeout: Supabase não respondeu a tempo. Continuando sem autenticação.');
-      setLoading(false);
+      finishLoading();
     }, AUTH_TIMEOUT_MS);
 
-    // Tenta obter a sessão do Supabase
-    supabase.auth.getSession()
-      .then(({ data, error }) => {
-        if (isTimedOut) {
-          // Se já deu timeout, ignora o resultado
-          console.log('Auth response received after timeout, ignoring initial load');
-          // Mas ainda atualiza o estado se tiver sessão válida
-          if (data.session?.user && !error) {
+    // 3) Carrega sessão inicial
+    supabase.auth
+      .getSession()
+      .then(async ({ data, error }) => {
+        const ms = Math.round(performance.now() - t0);
+        console.log('getSession ms:', ms);
+
+        if (!isMounted) return;
+
+        if (didTimeout) {
+          // UI já liberou, mas se vier sessão válida depois, aproveita
+          if (!error && data?.session?.user) {
             setSession(data.session);
             setUser(data.session.user);
-            fetchProfile(data.session.user.id, data.session.user.email);
+            try {
+              await fetchProfile(data.session.user.id, data.session.user.email);
+            } catch (e) {
+              console.error('fetchProfile after timeout failed:', e);
+            }
           }
           return;
         }
 
-        clearTimeout(timeoutId);
+        if (timeoutId) clearTimeout(timeoutId);
 
         if (error) {
           console.error('Erro ao obter sessão:', error);
@@ -201,49 +220,37 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           return;
         }
 
-        setSession(data.session);
-        setUser(data.session?.user ?? null);
+        const initialSession = data?.session ?? null;
+        setSession(initialSession);
+        setUser(initialSession?.user ?? null);
 
-        if (data.session?.user) {
-          fetchProfile(data.session.user.id, data.session.user.email)
-            .finally(finishLoading);
-        } else {
-          finishLoading();
-        }
-      })
-      .catch((error) => {
-        if (!isTimedOut) {
-          clearTimeout(timeoutId);
-          console.error('Erro na autenticação:', error);
-          finishLoading();
-        }
-      });
-
-    // Listener para mudanças de autenticação
-    const { data: listener } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        // Ignora eventos durante a inicialização
-        if (event === 'INITIAL_SESSION') return;
-
-        setSession(session);
-        setUser(session?.user ?? null);
-
-        if (session?.user) {
-          await fetchProfile(session.user.id, session.user.email);
+        if (initialSession?.user) {
+          try {
+            await fetchProfile(initialSession.user.id, initialSession.user.email);
+          } catch (e) {
+            console.error('fetchProfile failed:', e);
+          }
         } else {
           setProfile(null);
         }
-      }
-    );
+
+        finishLoading();
+      })
+      .catch((e) => {
+        console.error('Erro na autenticação:', e);
+        if (!didTimeout && timeoutId) clearTimeout(timeoutId);
+        finishLoading();
+      });
 
     return () => {
-      clearTimeout(timeoutId);
+      isMounted = false;
+      if (timeoutId) clearTimeout(timeoutId);
       listener.subscription.unsubscribe();
     };
   }, []);
 
   /* ────────────────────────────────────────────── */
-  /* Actions                                       */
+  /* Actions                                        */
   /* ────────────────────────────────────────────── */
 
   const signUp = async (email: string, password: string, fullName: string) => {
@@ -258,11 +265,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) toast.error(error.message);
     return { error };
   };
@@ -290,13 +293,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const updateProfile = async (updates: Partial<UserProfile>) => {
     if (!user) return { error: new Error('Not authenticated') };
 
-    await supabase
+    const { error } = await supabase
       .from('user_profiles')
       .update(updates)
       .eq('id', user.id);
 
-    setProfile(prev => (prev ? { ...prev, ...updates } : null));
-    return { error: null };
+    if (!error) {
+      setProfile((prev) => (prev ? { ...prev, ...updates } : null));
+    }
+
+    return { error };
   };
 
   const startTrial = async () => {
@@ -305,7 +311,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     const expiry = getTrialExpiryDate().toISOString();
-
     localStorage.setItem('isTrial', 'true');
     localStorage.setItem('trialExpiry', expiry);
 
@@ -356,8 +361,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     toast.success('Premium ativado!');
   };
-
-  /* ────────────────────────────────────────────── */
 
   return (
     <AuthContext.Provider

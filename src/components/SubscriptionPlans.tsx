@@ -30,6 +30,15 @@ interface SubscriptionPlansProps {
 type BillingCycle = 'month' | 'year';
 type PaidPlan = 'essencial' | 'caminhada' | 'semeador';
 
+function getErrMessage(e: unknown) {
+  if (e instanceof Error) return e.message;
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
+  }
+}
+
 async function goToMpCheckout(plan: PaidPlan, cycle: BillingCycle) {
   console.log('CLICK ->', plan, cycle);
 
@@ -220,12 +229,10 @@ const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({ currentPlan, onUp
                 onClick={async () => {
                   try {
                     setLoading("essencial-month");
-                    const { checkout_url } = await createMpPreference("essencial", "month");
-                    console.log("checkout_url:", checkout_url);
-                    window.location.href = checkout_url;
+                    await goToMpCheckout('essencial', 'month');
                   } catch (e) {
                     console.error(e);
-                    alert("Não foi possível iniciar o pagamento. Veja o console.");
+                    alert(`Não foi possível iniciar o pagamento.\n\n${getErrMessage(e)}`);
                   } finally {
                     setLoading(null);
                   }
@@ -246,7 +253,7 @@ const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({ currentPlan, onUp
                     await goToMpCheckout('essencial', 'year');
                   } catch (e) {
                     console.error(e);
-                    alert('Não foi possível iniciar o pagamento. Tente novamente.');
+                    alert(`Não foi possível iniciar o pagamento.\n\n${getErrMessage(e)}`);
                   } finally {
                     setLoading(null);
                   }
@@ -292,7 +299,7 @@ const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({ currentPlan, onUp
                     await goToMpCheckout('caminhada', 'month');
                   } catch (e) {
                     console.error(e);
-                    alert('Não foi possível iniciar o pagamento. Tente novamente.');
+                    alert(`Não foi possível iniciar o pagamento.\n\n${getErrMessage(e)}`);
                   } finally {
                     setLoading(null);
                   }
@@ -312,7 +319,7 @@ const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({ currentPlan, onUp
                     await goToMpCheckout('caminhada', 'year');
                   } catch (e) {
                     console.error(e);
-                    alert('Não foi possível iniciar o pagamento. Tente novamente.');
+                    alert(`Não foi possível iniciar o pagamento.\n\n${getErrMessage(e)}`);
                   } finally {
                     setLoading(null);
                   }
@@ -358,7 +365,7 @@ const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({ currentPlan, onUp
                     await goToMpCheckout('semeador', 'month');
                   } catch (e) {
                     console.error(e);
-                    alert('Não foi possível iniciar o pagamento. Tente novamente.');
+                    alert(`Não foi possível iniciar o pagamento.\n\n${getErrMessage(e)}`);
                   } finally {
                     setLoading(null);
                   }
@@ -378,7 +385,7 @@ const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({ currentPlan, onUp
                     await goToMpCheckout('semeador', 'year');
                   } catch (e) {
                     console.error(e);
-                    alert('Não foi possível iniciar o pagamento. Tente novamente.');
+                    alert(`Não foi possível iniciar o pagamento.\n\n${getErrMessage(e)}`);
                   } finally {
                     setLoading(null);
                   }
