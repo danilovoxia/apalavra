@@ -1,5 +1,5 @@
 import React from 'react';
-import { Cloud, CloudOff, RefreshCw, Check, AlertCircle, Wifi, WifiOff } from 'lucide-react';
+import { Cloud, RefreshCw, Check, AlertCircle, WifiOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   Tooltip,
@@ -30,18 +30,27 @@ const SyncIndicator: React.FC<SyncIndicatorProps> = ({
 }) => {
   let pendingCount = 0;
   let isOnline = true;
-  
+
   // Try to get offline context values, but don't fail if not available
   try {
     const offlineContext = useOffline();
     pendingCount = offlineContext.pendingCount;
     isOnline = offlineContext.isOnline;
-  } catch (e) {
-    // Context not available, use defaults
+  } catch {
+    // Context not available
   }
 
   // Override status if offline
-  const effectiveStatus = !isOnline ? 'offline' : status;
+  const effectiveStatus: SyncStatus = !isOnline ? 'offline' : status;
+
+  // ✅ Só mostra quando há algo relevante (evita “Sincronizando…” eterno no header)
+  const shouldShow =
+    effectiveStatus === 'syncing' ||
+    effectiveStatus === 'error' ||
+    effectiveStatus === 'offline' ||
+    pendingCount > 0;
+
+  if (!shouldShow) return null;
 
   const getStatusConfig = () => {
     switch (effectiveStatus) {
@@ -93,12 +102,12 @@ const SyncIndicator: React.FC<SyncIndicatorProps> = ({
 
   const formatLastSync = () => {
     if (!lastSyncedAt) return null;
-    
+
     const now = new Date();
     const diff = now.getTime() - lastSyncedAt.getTime();
     const minutes = Math.floor(diff / 60000);
     const hours = Math.floor(diff / 3600000);
-    
+
     if (minutes < 1) return 'Agora mesmo';
     if (minutes < 60) return `Há ${minutes} min`;
     if (hours < 24) return `Há ${hours}h`;
@@ -119,13 +128,9 @@ const SyncIndicator: React.FC<SyncIndicatorProps> = ({
               className
             )}
           >
-            <Icon 
-              className={cn(
-                'w-3.5 h-3.5',
-                config.animate && 'animate-spin'
-              )} 
-            />
+            <Icon className={cn('w-3.5 h-3.5', config.animate && 'animate-spin')} />
             <span className="hidden sm:inline">{config.label}</span>
+
             {showPendingCount && pendingCount > 0 && (
               <span className="ml-1 px-1.5 py-0.5 bg-white/30 rounded-full text-[10px] font-bold">
                 {pendingCount}
@@ -133,22 +138,25 @@ const SyncIndicator: React.FC<SyncIndicatorProps> = ({
             )}
           </button>
         </TooltipTrigger>
+
         <TooltipContent side="bottom" className="max-w-xs">
           <div className="space-y-1">
             <p className="font-medium">{config.label}</p>
+
             {lastSyncedAt && effectiveStatus === 'synced' && (
               <p className="text-xs text-muted-foreground">
                 Última sincronização: {formatLastSync()}
               </p>
             )}
+
             {effectiveStatus === 'error' && errorMessage && (
               <p className="text-xs text-red-400">{errorMessage}</p>
             )}
+
             {effectiveStatus === 'error' && onRetry && (
-              <p className="text-xs text-muted-foreground">
-                Clique para tentar novamente
-              </p>
+              <p className="text-xs text-muted-foreground">Clique para tentar novamente</p>
             )}
+
             {effectiveStatus === 'offline' && (
               <div className="space-y-1">
                 <p className="text-xs text-muted-foreground">
@@ -160,6 +168,12 @@ const SyncIndicator: React.FC<SyncIndicatorProps> = ({
                   </p>
                 )}
               </div>
+            )}
+
+            {effectiveStatus === 'syncing' && pendingCount > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {pendingCount} {pendingCount === 1 ? 'item na fila' : 'itens na fila'}
+              </p>
             )}
           </div>
         </TooltipContent>

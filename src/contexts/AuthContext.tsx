@@ -52,8 +52,17 @@ export const useAuth = () => {
   return ctx;
 };
 
-// Timeout para evitar travar se o Supabase estiver lento
 const AUTH_TIMEOUT_MS = 20000;
+
+const safeLSGet = (k: string) => {
+  try { return localStorage.getItem(k); } catch { return null; }
+};
+const safeLSSet = (k: string, v: string) => {
+  try { localStorage.setItem(k, v); } catch {}
+};
+const safeLSRemove = (k: string) => {
+  try { localStorage.removeItem(k); } catch {}
+};
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -62,35 +71,27 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [loading, setLoading] = useState(true);
   const initCompleteRef = useRef(false);
 
-  /* ────────────────────────────────────────────── */
-  /* Helpers                                        */
-  /* ────────────────────────────────────────────── */
-
   const hasUsedTrial = useMemo(() => {
-    return profile?.has_used_trial || localStorage.getItem('hasUsedTrial') === 'true';
+    return !!profile?.has_used_trial || safeLSGet('hasUsedTrial') === 'true';
   }, [profile]);
 
   const isTrial = useMemo(() => {
     if (profile?.is_trial && profile.trial_expires_at) {
       return new Date(profile.trial_expires_at) > new Date();
     }
-
-    const localTrial = localStorage.getItem('isTrial');
-    const expiry = localStorage.getItem('trialExpiry');
-
+    const localTrial = safeLSGet('isTrial');
+    const expiry = safeLSGet('trialExpiry');
     return localTrial === 'true' && !!expiry && new Date(expiry) > new Date();
   }, [profile]);
 
   const trialDaysRemaining = useMemo(() => {
-    const expiry = profile?.trial_expires_at || localStorage.getItem('trialExpiry');
+    const expiry = profile?.trial_expires_at || safeLSGet('trialExpiry');
     if (!expiry) return null;
-
-    const diff = new Date(expiry).getTime() - new Date().getTime();
+    const diff = new Date(expiry).getTime() - Date.now();
     return diff > 0 ? Math.ceil(diff / (1000 * 60 * 60 * 24)) : null;
   }, [profile]);
 
   const isPremium = useMemo(() => {
-    // Trial NÃO é Premium
     if (isTrial) return false;
 
     if (profile?.is_premium) {
@@ -98,21 +99,29 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return new Date(profile.premium_expires_at) > new Date();
     }
 
-    const storedPlan = localStorage.getItem('userPlan');
-    const expiry = localStorage.getItem('premiumExpiry');
+    const storedPlan = safeLSGet('userPlan');
+    const expiry = safeLSGet('premiumExpiry');
 
     if (storedPlan === 'premium') {
       if (!expiry || new Date(expiry) > new Date()) return true;
-      localStorage.removeItem('userPlan');
-      localStorage.removeItem('premiumExpiry');
+      safeLSRemove('userPlan');
+      safeLSRemove('premiumExpiry');
     }
 
     return false;
   }, [profile, isTrial]);
 
-  /* ────────────────────────────────────────────── */
-  /* Profile                                        */
-  /* ────────────────────────────────────────────── */
+  const buildFallbackProfile = (userId: string, email?: string): UserProfile => ({
+    id: userId,
+    email: email || '',
+    full_name: '',
+    avatar_url: '',
+    is_premium: false,
+    premium_expires_at: null,
+    is_trial: safeLSGet('isTrial') === 'true',
+    trial_expires_at: safeLSGet('trialExpiry'),
+    has_used_trial: safeLSGet('hasUsedTrial') === 'true',
+  });
 
   const fetchProfile = async (userId: string, email?: string) => {
     try {
@@ -122,139 +131,107 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         .eq('id', userId)
         .single();
 
-      if (error || !data) {
-        setProfile({
-          id: userId,
-          email: email || '',
-          full_name: '',
-          avatar_url: '',
-          is_premium: false,
-          premium_expires_at: null,
-          is_trial: false,
-          trial_expires_at: null,
-          has_used_trial: localStorage.getItem('hasUsedTrial') === 'true',
-        });
+      // ✅ tabela não existe / schema cache / etc -> não quebra o app
+      if (error) {
+        console.warn('fetchProfile error:', error);
+        setProfile(buildFallbackProfile(userId, email));
         return;
       }
 
-      setProfile(data);
-    } catch {
-      setProfile(null);
+      if (!data) {
+        setProfile(buildFallbackProfile(userId, email));
+        return;
+      }
+
+      setProfile(data as UserProfile);
+    } catch (e) {
+      console.warn('fetchProfile exception:', e);
+      setProfile(buildFallbackProfile(userId, email));
     }
   };
-
-  /* ────────────────────────────────────────────── */
-  /* Init Auth com Timeout                          */
-  /* ────────────────────────────────────────────── */
 
   useEffect(() => {
     if (initCompleteRef.current) return;
     initCompleteRef.current = true;
-  
+
     let isMounted = true;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let didTimeout = false;
-  
+
     const finishLoading = () => {
       if (!isMounted) return;
       setLoading(false);
     };
-  
+
     const { data: listener } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
       if (!isMounted) return;
-  
+
       setSession(newSession);
       setUser(newSession?.user ?? null);
-  
+
       try {
         if (newSession?.user) {
           await fetchProfile(newSession.user.id, newSession.user.email);
         } else {
           setProfile(null);
         }
-      } catch (e) {
-        console.error('fetchProfile error:', e);
-        // se der erro no profile, ainda assim libera UI
-        setProfile(null);
       } finally {
         if (!didTimeout) finishLoading();
       }
     });
-  
-    // Timeout de segurança
+
     timeoutId = setTimeout(() => {
       didTimeout = true;
-      console.warn('Auth timeout: Supabase não respondeu a tempo. Continuando sem autenticação.');
+      console.warn('Auth timeout: Supabase demorou. Continuando sem travar UI.');
       finishLoading();
     }, AUTH_TIMEOUT_MS);
-  
-    // Carrega sessão inicial
+
     supabase.auth
       .getSession()
       .then(async ({ data, error }) => {
         if (!isMounted) return;
-  
+
         if (didTimeout) {
-          // UI já liberou; mas se veio sessão depois, ainda atualiza estado
           if (!error && data?.session?.user) {
             setSession(data.session);
             setUser(data.session.user);
-            try {
-              await fetchProfile(data.session.user.id, data.session.user.email);
-            } catch (e) {
-              console.error('fetchProfile after timeout failed:', e);
-            }
+            await fetchProfile(data.session.user.id, data.session.user.email);
           }
           return;
         }
-  
+
         if (timeoutId) clearTimeout(timeoutId);
-  
+
         if (error) {
           console.error('Erro ao obter sessão:', error);
-          setSession(null);
-          setUser(null);
-          setProfile(null);
           finishLoading();
           return;
         }
-  
+
         const initialSession = data?.session ?? null;
         setSession(initialSession);
         setUser(initialSession?.user ?? null);
-  
-        try {
-          if (initialSession?.user) {
-            await fetchProfile(initialSession.user.id, initialSession.user.email);
-          } else {
-            setProfile(null);
-          }
-        } catch (e) {
-          console.error('fetchProfile failed:', e);
+
+        if (initialSession?.user) {
+          await fetchProfile(initialSession.user.id, initialSession.user.email);
+        } else {
           setProfile(null);
-        } finally {
-          finishLoading();
         }
+
+        finishLoading();
       })
       .catch((e) => {
         console.error('Erro na autenticação:', e);
         if (!didTimeout && timeoutId) clearTimeout(timeoutId);
-        setSession(null);
-        setUser(null);
-        setProfile(null);
         finishLoading();
       });
-  
+
     return () => {
       isMounted = false;
       if (timeoutId) clearTimeout(timeoutId);
       listener.subscription.unsubscribe();
     };
   }, []);
-  
-  /* ────────────────────────────────────────────── */
-  /* Actions                                        */
-  /* ────────────────────────────────────────────── */
 
   const signUp = async (email: string, password: string, fullName: string) => {
     const { error } = await supabase.auth.signUp({
@@ -296,42 +273,43 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const updateProfile = async (updates: Partial<UserProfile>) => {
     if (!user) return { error: new Error('Not authenticated') };
 
-    const { error } = await supabase
-      .from('user_profiles')
-      .update(updates)
-      .eq('id', user.id);
+    try {
+      const { error } = await supabase
+        .from('user_profiles')
+        .update(updates)
+        .eq('id', user.id);
 
-    if (!error) {
-      setProfile((prev) => (prev ? { ...prev, ...updates } : null));
+      if (!error) setProfile((prev) => (prev ? { ...prev, ...updates } : prev));
+      return { error };
+    } catch (e) {
+      console.warn('updateProfile exception:', e);
+      // ✅ não quebra se tabela ainda não existe
+      setProfile((prev) => (prev ? { ...prev, ...updates } : prev));
+      return { error: null };
     }
-
-    return { error };
   };
 
   const startTrial = async () => {
-    if (hasUsedTrial) {
-      return { success: false, error: 'Trial já utilizado.' };
-    }
+    if (hasUsedTrial) return { success: false, error: 'Trial já utilizado.' };
+    if (!user) return { success: false, error: 'Você precisa estar logado para ativar o trial.' };
 
     const expiry = getTrialExpiryDate().toISOString();
-    localStorage.setItem('isTrial', 'true');
-    localStorage.setItem('trialExpiry', expiry);
+    safeLSSet('isTrial', 'true');
+    safeLSSet('trialExpiry', expiry);
 
-    if (user) {
-      await updateProfile({
-        is_trial: true,
-        trial_expires_at: expiry,
-      });
-    }
+    await updateProfile({
+      is_trial: true,
+      trial_expires_at: expiry,
+    });
 
     toast.success('Trial ativado!');
     return { success: true };
   };
 
   const cancelTrial = async () => {
-    localStorage.removeItem('isTrial');
-    localStorage.removeItem('trialExpiry');
-    localStorage.setItem('hasUsedTrial', 'true');
+    safeLSRemove('isTrial');
+    safeLSRemove('trialExpiry');
+    safeLSSet('hasUsedTrial', 'true');
 
     if (user) {
       await updateProfile({
@@ -348,9 +326,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       ? expires.setMonth(expires.getMonth() + 1)
       : expires.setFullYear(expires.getFullYear() + 1);
 
-    localStorage.setItem('userPlan', 'premium');
-    localStorage.setItem('premiumExpiry', expires.toISOString());
-    localStorage.setItem('hasUsedTrial', 'true');
+    safeLSSet('userPlan', 'premium');
+    safeLSSet('premiumExpiry', expires.toISOString());
+    safeLSSet('hasUsedTrial', 'true');
 
     if (user) {
       await updateProfile({
